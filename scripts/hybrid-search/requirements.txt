@@ -1,0 +1,7 @@
+# Core dependencies
+zstandard>=0.21.0      # Zstd decompression for blobs
+cbor2>=5.4.0           # DAG-CBOR decoding
+requests>=2.28.0       # Ollama API calls
+
+# Optional: Fallback embedding backend
+sentence-transformers>=2.2.0
