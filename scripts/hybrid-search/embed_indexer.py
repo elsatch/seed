@@ -147,8 +147,14 @@ class EmbeddingIndexer:
             with open(migration_path) as f:
                 # Execute each statement separately (skip VSS for now)
                 for statement in f.read().split(';'):
+                    # Remove comment lines and strip whitespace
+                    statement = '\n'.join(
+                        line for line in statement.split('\n')
+                        if line.strip() and not line.strip().startswith('--')
+                    )
                     statement = statement.strip()
-                    if statement and not statement.startswith('--') and 'vss0' not in statement.lower():
+                    if statement and 'vss0' not in statement.lower():
+                        print('Statement:', statement)
                         conn.execute(statement)
             conn.commit()
             print("Embeddings table created.")
