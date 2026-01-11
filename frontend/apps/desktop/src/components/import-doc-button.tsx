@@ -31,7 +31,7 @@ import {
 import {FormInput} from '@shm/ui/form-input'
 import {FormField} from '@shm/ui/forms'
 import {HMIcon} from '@shm/ui/hm-icon'
-import {File, FileInput, Folder, FolderInput, Globe} from '@shm/ui/icons'
+import {File, FileInput, Folder, FolderInput, Globe, Layout} from '@shm/ui/icons'
 import {OptionsDropdown} from '@shm/ui/options-dropdown'
 import {
   Select,
@@ -66,6 +66,7 @@ export function ImportDialog({
     onImportLatexFile: () => void
     onImportLatexDirectory: () => void
     onImportWebSite: () => void
+    onImportHugoSite: () => void
   }
   onClose: () => void
 }) {
@@ -132,6 +133,17 @@ export function ImportDialog({
           <Globe className="size-3" />
           Import Web Site
         </Button>
+        <Button
+          className="border-border border"
+          variant="ghost"
+          onClick={() => {
+            onClose()
+            input.onImportHugoSite()
+          }}
+        >
+          <Layout className="size-3" />
+          Import Hugo Site
+        </Button>
       </div>
     </>
   )
@@ -149,6 +161,7 @@ export function ImportDropdownButton({
     importDirectory,
     importLatexFile,
     importLatexDirectory,
+    importHugoSite,
     content,
   } = useImporting(id)
 
@@ -180,6 +193,12 @@ export function ImportDropdownButton({
             label: 'Import LaTeX Folder',
             onClick: () => importLatexDirectory(),
             icon: <FolderInput className="size-4" />,
+          },
+          {
+            key: 'hugo-site',
+            label: 'Import Hugo Site',
+            onClick: () => importHugoSite(),
+            icon: <Layout className="size-4" />,
           },
         ]}
       />
@@ -297,6 +316,7 @@ export function useImporting(parentId: UnpackedHypermediaId) {
   }
 
   const webImporting = useWebImporting()
+  const hugoImporting = useHugoImporting()
 
   // Wrapper to handle LaTeX file import
   function startLatexImport(
@@ -336,10 +356,12 @@ export function useImporting(parentId: UnpackedHypermediaId) {
     importLatexFile: () => startLatexImport(openLatexFiles),
     importLatexDirectory: () => startLatexImport(openLatexDirectories),
     importWebSite: () => webImporting.open({destinationId: parentId}),
+    importHugoSite: () => hugoImporting.open({destinationId: parentId}),
     content: (
       <>
         {importDialog.content}
         {webImporting.content}
+        {hugoImporting.content}
       </>
     ),
   }
@@ -728,4 +750,269 @@ const ImportDocumentsWithFeedback = (
       reject(error)
     }
   })
+}
+
+export function useHugoImporting() {
+  return useAppDialog(HugoImportDialog)
+}
+
+function HugoImportDialog({
+  onClose,
+  input,
+}: {
+  onClose: () => void
+  input: {
+    destinationId: UnpackedHypermediaId
+  }
+}) {
+  const [importId, setImportId] = useState<string | null>(null)
+  const [contentPath, setContentPath] = useState<string | null>(null)
+  const [includeDrafts, setIncludeDrafts] = useState(false)
+
+  const selectFolder = useMutation({
+    mutationFn: () => client.hugoImporting.selectHugoFolder.mutate(),
+  })
+
+  const startScan = useMutation({
+    mutationFn: (params: {contentPath: string; includeDrafts: boolean}) =>
+      client.hugoImporting.scanHugoSite.mutate(params),
+  })
+
+  const handleSelectFolder = async () => {
+    const result = await selectFolder.mutateAsync()
+    if (result) {
+      setContentPath(result.path)
+      const scanResult = await startScan.mutateAsync({
+        contentPath: result.path,
+        includeDrafts,
+      })
+      setImportId(scanResult.importId)
+    }
+  }
+
+  if (importId && contentPath) {
+    return (
+      <HugoImportInProgress
+        id={importId}
+        onComplete={onClose}
+        destinationId={input.destinationId}
+        contentPath={contentPath}
+      />
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <DialogTitle>Import Hugo Site</DialogTitle>
+      <DialogDescription>
+        Select a Hugo site folder to import its content.
+      </DialogDescription>
+      <DialogClose />
+
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id="includeDrafts"
+          checked={includeDrafts}
+          onChange={(e) => setIncludeDrafts(e.target.checked)}
+        />
+        <label htmlFor="includeDrafts">Include draft pages</label>
+      </div>
+
+      <Button
+        variant="default"
+        onClick={handleSelectFolder}
+        disabled={selectFolder.isLoading || startScan.isLoading}
+      >
+        {selectFolder.isLoading || startScan.isLoading ? (
+          <Spinner size="small" />
+        ) : (
+          <>
+            <Folder className="size-4" />
+            Select Hugo Site Folder
+          </>
+        )}
+      </Button>
+    </div>
+  )
+}
+
+function HugoImportInProgress({
+  id,
+  onComplete,
+  destinationId,
+  contentPath,
+}: {
+  id: string
+  onComplete: () => void
+  destinationId: UnpackedHypermediaId
+  contentPath: string
+}) {
+  const {data: status, refetch} = useQuery({
+    queryKey: ['HUGO_IMPORT_STATUS', id],
+    queryFn: () => client.hugoImporting.getHugoImportStatus.query(id),
+    refetchInterval: 500,
+  })
+
+  const {data: pages} = useQuery({
+    queryKey: ['HUGO_IMPORT_PAGES', id],
+    queryFn: () => client.hugoImporting.getHugoPages.query(id),
+    enabled: status?.mode === 'ready',
+  })
+
+  const confirmImport = useMutation({
+    mutationFn: (
+      params: Parameters<typeof client.hugoImporting.confirmHugoImport.mutate>[0],
+    ) => client.hugoImporting.confirmHugoImport.mutate(params),
+  })
+
+  const accounts = useMyAccountsWithWriteAccess(destinationId)
+  const [selectedAccount, setSelectedAccount] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!selectedAccount && accounts[0]?.data?.id.uid) {
+      setSelectedAccount(accounts[0].data?.id.uid)
+    }
+  }, [selectedAccount, accounts.map((a) => a.data?.id.uid)])
+
+  if (status?.mode === 'scanning') {
+    return (
+      <div className="flex flex-col gap-4">
+        <DialogTitle>Scanning Hugo Site...</DialogTitle>
+        <Spinner size="small" />
+      </div>
+    )
+  }
+
+  if (status?.mode === 'error') {
+    return (
+      <div className="flex flex-col gap-4">
+        <DialogTitle>Error Scanning Hugo Site</DialogTitle>
+        <SizableText color="destructive">Error: {status.error}</SizableText>
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    )
+  }
+
+  if (status?.mode === 'importing') {
+    return (
+      <div className="flex flex-col gap-4">
+        <DialogTitle>Importing Hugo Site...</DialogTitle>
+        <SizableText>
+          Importing {status.progress.current} of {status.progress.total}
+        </SizableText>
+        <SizableText color="muted" size="sm" className="truncate">
+          {status.progress.currentPage}
+        </SizableText>
+        <Spinner size="small" />
+      </div>
+    )
+  }
+
+  if (status?.mode === 'complete') {
+    return (
+      <div className="flex flex-col gap-4">
+        <DialogTitle>Import Complete</DialogTitle>
+        <SizableText>
+          Successfully imported {status.imported} pages.
+        </SizableText>
+        <Button variant="default" onClick={onClose}>
+          Done
+        </Button>
+      </div>
+    )
+  }
+
+  if (status?.mode === 'ready' && pages) {
+    const pageCount = pages.length
+    const sectionCount = pages.filter((p) => p.isSection).length
+
+    return (
+      <div className="flex flex-col gap-4">
+        <DialogTitle>Ready to Import</DialogTitle>
+        <SizableText>
+          Found {pageCount} pages ({sectionCount} sections)
+        </SizableText>
+
+        {selectedAccount && (
+          <Select value={selectedAccount} onValueChange={setSelectedAccount}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select Account" />
+            </SelectTrigger>
+            <SelectContent>
+              {accounts
+                .map((a) => {
+                  const accountId = a.data?.id
+                  if (!accountId) return null
+                  return (
+                    <SelectItem key={accountId.uid} value={accountId.uid}>
+                      <div className="flex items-center gap-2">
+                        <HMIcon
+                          size={24}
+                          id={accountId}
+                          // @ts-expect-error
+                          metadata={a.data?.document?.metadata}
+                        />
+                        {/* @ts-expect-error */}
+                        {a.data?.document?.metadata?.name || ''}
+                      </div>
+                    </SelectItem>
+                  )
+                })
+                .filter(Boolean)}
+            </SelectContent>
+          </Select>
+        )}
+
+        <div className="max-h-60 overflow-y-auto rounded border p-2">
+          {pages.map((page) => (
+            <div key={page.relativePath} className="flex items-center gap-2 py-1">
+              {page.isSection ? (
+                <Folder className="size-4 text-muted-foreground" />
+              ) : (
+                <File className="size-4 text-muted-foreground" />
+              )}
+              <SizableText size="sm" className="truncate">
+                {page.title}
+              </SizableText>
+              <SizableText size="xs" color="muted" className="truncate">
+                /{page.seedPath.join('/')}
+              </SizableText>
+            </div>
+          ))}
+        </div>
+
+        <Button
+          variant="default"
+          onClick={() => {
+            if (!selectedAccount) {
+              toast.error('Please select an account')
+              return
+            }
+            confirmImport.mutateAsync({
+              importId: id,
+              destinationId: destinationId.id,
+              signAccountUid: selectedAccount,
+            })
+          }}
+          disabled={confirmImport.isLoading}
+        >
+          {confirmImport.isLoading ? (
+            <Spinner size="small" />
+          ) : (
+            `Import & Publish ${pageCount} Pages`
+          )}
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <DialogTitle>Loading...</DialogTitle>
+      <Spinner size="small" />
+    </div>
+  )
 }

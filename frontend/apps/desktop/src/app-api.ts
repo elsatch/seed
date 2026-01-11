@@ -28,6 +28,7 @@ import {experimentsApi} from './app-experiments'
 import {favoritesApi} from './app-favorites'
 import {gatewaySettingsApi} from './app-gateway-settings'
 import {hostApi} from './app-host'
+import {hugoImportingApi} from './app-hugo-importing'
 import {appInvalidateQueries, queryInvalidation} from './app-invalidation'
 import {userDataPath} from './app-paths'
 import {promptingApi} from './app-prompting'
@@ -215,6 +216,7 @@ export const router = t.router({
   diagnosis: diagnosisApi,
   welcoming: welcomingApi,
   webImporting: webImportingApi,
+  hugoImporting: hugoImportingApi,
   web: t.router({
     queryMeta: t.procedure.input(z.string()).query(async ({input}) => {
       const res = await fetch(input)
