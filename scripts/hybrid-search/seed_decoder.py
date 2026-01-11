@@ -18,11 +18,11 @@ import platform
 def get_default_db_path() -> Path:
     """Get platform-specific default database path."""
     if platform.system() == "Darwin":
-        return Path.home() / "Library/Application Support/seed-daemon/db/db.sqlite"
+        return Path.home() / "Library/Application Support/Seed/daemon/db/db.sqlite"
     elif platform.system() == "Windows":
-        return Path(os.environ.get("APPDATA", "")) / "seed-daemon/db/db.sqlite"
+        return Path(os.environ.get("APPDATA", "")) / "Seed/daemon/db/db.sqlite"
     else:  # Linux and others
-        return Path.home() / ".local/share/seed-daemon/db/db.sqlite"
+        return Path.home() / ".config/Seed/daemon/db/db.sqlite"
 
 
 DEFAULT_DB_PATH = get_default_db_path()

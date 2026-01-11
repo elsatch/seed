@@ -29,7 +29,8 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_blob ON embeddings (blob_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_fts ON embeddings (fts_rowid);
 CREATE INDEX IF NOT EXISTS idx_embeddings_type ON embeddings (content_type);
 
--- sqlite-vss virtual table for vector similarity search
--- Dimensions set to 768 for Gemma embeddings
--- Note: This requires sqlite-vss extension to be loaded first
--- CREATE VIRTUAL TABLE IF NOT EXISTS vss_embeddings USING vss0(embedding(768));
+-- sqlite-vec virtual table for vector similarity search
+-- Using vec0 (sqlite-vec) - successor to sqlite-vss
+-- Dimensions are dynamic based on the embedding model used
+-- This table is created separately when sqlite-vec is loaded
+-- See: https://alexgarcia.xyz/sqlite-vec/

@@ -31,14 +31,7 @@ pip install --upgrade pip -q
 
 # Install dependencies
 echo "Installing dependencies..."
-pip install -q \
-    zstandard \
-    cbor2 \
-    requests
-
-# Try to install sentence-transformers (fallback embedding backend)
-echo "Installing sentence-transformers (fallback backend)..."
-pip install -q sentence-transformers || echo "Warning: sentence-transformers install failed (optional)"
+pip install -q -r requirements.txt
 
 # Check Ollama
 echo
@@ -69,9 +62,9 @@ fi
 echo
 echo "Checking database..."
 if [ "$(uname)" == "Darwin" ]; then
-    DB_PATH="$HOME/Library/Application Support/seed-daemon/db/db.sqlite"
+    DB_PATH="$HOME/Library/Application Support/Seed/daemon/db/db.sqlite"
 else
-    DB_PATH="$HOME/.local/share/seed-daemon/db/db.sqlite"
+    DB_PATH="$HOME/.config/Seed/daemon/db/db.sqlite"
 fi
 
 if [ -f "$DB_PATH" ]; then
@@ -88,7 +81,7 @@ indexer.ensure_schema()
     echo "Schema ready"
 else
     echo "Warning: Database not found at: $DB_PATH"
-    echo "Make sure Seed daemon has run at least once"
+    echo "Make sure Seed app has run at least once"
 fi
 
 echo

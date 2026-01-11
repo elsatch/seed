@@ -5,16 +5,13 @@ description: Semantic search over locally replicated Seed documents. Use when fi
 
 # Seed Semantic Search
 
-Hybrid retrieval combining vector embeddings + FTS5 keyword search over local Seed database.
+Hybrid retrieval combining sqlite-vec (vector KNN) + FTS5 (keyword) over local Seed database.
 
 ## Prerequisites
 
-Ensure Ollama is running with an embedding model:
 ```bash
-# Check Ollama status
-ollama list
-
-# Pull recommended model if needed
+# Ollama running with embedding model
+ollama serve
 ollama pull nomic-embed-text
 ```
 
@@ -22,10 +19,9 @@ ollama pull nomic-embed-text
 
 ```bash
 cd ~/seed/scripts/hybrid-search
-source .venv/bin/activate  # If venv exists
+./setup.sh  # First time only
 
-# First time: run setup
-./setup.sh
+source .venv/bin/activate
 
 # Index content (manual trigger)
 python embed_indexer.py
@@ -36,67 +32,45 @@ python hybrid_search.py "your query"
 
 ## Commands
 
-### Index New Content
+### Index Content
 ```bash
-# Index all unembedded content
-python embed_indexer.py
-
-# Index with specific model
-python embed_indexer.py --model gemma2:2b
-
-# Index only titles
-python embed_indexer.py --types title
-
-# Check stats
-python embed_indexer.py --stats
+python embed_indexer.py                    # Index all
+python embed_indexer.py --model gemma2:2b  # Use Gemma
+python embed_indexer.py --types title      # Only titles
+python embed_indexer.py --stats            # Show stats
 ```
 
 ### Search
 ```bash
-# Hybrid search (recommended)
-python hybrid_search.py "query"
-
-# Semantic only
-python hybrid_search.py "query" --mode semantic
-
-# Keyword only
-python hybrid_search.py "query" --mode keyword
-
-# JSON output
-python hybrid_search.py "query" --format json
-
-# Adjust semantic weight (0.7 = more semantic)
-python hybrid_search.py "query" --weight 0.7
-
-# Search specific types
-python hybrid_search.py "query" --types title document
+python hybrid_search.py "query"                    # Hybrid (default)
+python hybrid_search.py "query" --mode semantic    # Semantic only
+python hybrid_search.py "query" --mode keyword     # Keyword only
+python hybrid_search.py "query" --format json      # JSON output
+python hybrid_search.py "query" --weight 0.7       # More semantic
 ```
 
-## Embedding Models
+## Database Locations
 
-| Model | Backend | Dimensions | Notes |
-|-------|---------|------------|-------|
-| `nomic-embed-text` | Ollama | 768 | Recommended default |
-| `gemma2:2b` | Ollama | 2048 | Higher quality |
-| `mxbai-embed-large` | Ollama | 1024 | Good balance |
-| `all-MiniLM-L6-v2` | sentence-transformers | 384 | Fallback |
+| Platform | Path |
+|----------|------|
+| Linux | `~/.config/Seed/daemon/db/db.sqlite` |
+| macOS | `~/Library/Application Support/Seed/daemon/db/db.sqlite` |
 
-## Database
+## Models
 
-Location: `~/.local/share/seed-daemon/db/db.sqlite`
+| Model | Dimensions | Notes |
+|-------|------------|-------|
+| `nomic-embed-text` | 768 | Recommended |
+| `gemma2:2b` | 2048 | Higher quality |
+| `mxbai-embed-large` | 1024 | Good balance |
 
-Indexes both public and authenticated content from:
-- Document text (type: document)
-- Document titles (type: title)
-- Comments (type: comment)
+## Output
 
-## Output Format
-
-Text mode shows ranked results:
+Text mode:
 ```
 1. [document] hm://z6Mk.../path
    Score: 0.0234 (sem:0.823 kw:0.156)
    Content snippet...
 ```
 
-JSON mode returns structured data with all metadata.
+JSON mode returns structured data with IRI, scores, timestamps, and author info.
