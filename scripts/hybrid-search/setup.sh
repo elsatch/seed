@@ -30,33 +30,11 @@ source .venv/bin/activate
 pip install --upgrade pip -q
 
 # Install dependencies
-echo "Installing dependencies..."
-pip install -q -r requirements.txt
+echo "Installing dependencies (this may take a while for torch)..."
+pip install -r requirements.txt
 
-# Check Ollama
 echo
-echo "Checking Ollama..."
-if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-    echo "Ollama is running"
-
-    # List available models
-    MODELS=$(curl -s http://localhost:11434/api/tags | python3 -c "import sys,json; print(' '.join(m['name'] for m in json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo "")
-    if [ -n "$MODELS" ]; then
-        echo "Available models: $MODELS"
-    fi
-
-    # Check for embedding model
-    if ! echo "$MODELS" | grep -q "nomic-embed-text"; then
-        echo
-        echo "Recommended: Pull nomic-embed-text for embeddings:"
-        echo "  ollama pull nomic-embed-text"
-    fi
-else
-    echo "Warning: Ollama not running at localhost:11434"
-    echo "Start Ollama and pull an embedding model:"
-    echo "  ollama serve"
-    echo "  ollama pull nomic-embed-text"
-fi
+echo "Dependencies installed."
 
 # Detect database path
 echo
@@ -91,9 +69,15 @@ echo "Usage:"
 echo "  cd $SCRIPT_DIR"
 echo "  source .venv/bin/activate"
 echo
-echo "  # Index content"
+echo "  # Index content (first run downloads the model)"
 echo "  python embed_indexer.py"
 echo
 echo "  # Search"
 echo "  python hybrid_search.py 'your query'"
+echo
+echo "Available models:"
+echo "  - google/embeddinggemma-300m (default, Gemma-based)"
+echo "  - BAAI/bge-m3 (multilingual)"
+echo "  - Qwen/Qwen3-Embedding-0.6B"
+echo "  - Qwen/Qwen3-Embedding-8B (high quality)"
 echo
