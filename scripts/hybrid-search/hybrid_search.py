@@ -256,13 +256,16 @@ class HybridSearch:
             fi.version,
             fi.ts,
             f.raw_content,
-            r.iri,
+            COALESCE(r1.iri, r2.iri) as iri,
             pk.principal
         FROM embeddings e
         JOIN fts_index fi ON fi.rowid = e.fts_rowid
         JOIN fts f ON f.rowid = fi.rowid
         LEFT JOIN structural_blobs sb ON sb.id = e.blob_id
-        LEFT JOIN resources r ON r.id = sb.resource
+        LEFT JOIN resources r1 ON r1.id = sb.resource
+        LEFT JOIN blob_links bl ON bl.target = e.blob_id AND bl.type = 'ref/head'
+        LEFT JOIN structural_blobs sb_ref ON sb_ref.id = bl.source
+        LEFT JOIN resources r2 ON r2.id = sb_ref.resource
         LEFT JOIN public_keys pk ON pk.id = sb.author
         WHERE e.model = ?
         AND e.content_type IN ({placeholders})
@@ -281,7 +284,7 @@ class HybridSearch:
                 "blob_id": row["blob_id"],
                 "block_id": row["block_id"],
                 "content_type": row["content_type"],
-                "text_snippet": row["raw_content"][:300] if row["raw_content"] else "",
+                "text_snippet": row["raw_content"][:100] if row["raw_content"] else "",
                 "version": row["version"] or "",
                 "semantic_score": (similarity + 1) / 2,  # Normalize to 0-1
                 "timestamp": row["ts"],
@@ -324,13 +327,16 @@ class HybridSearch:
             fi.version,
             fi.ts,
             f.raw_content,
-            r.iri,
+            COALESCE(r1.iri, r2.iri) as iri,
             pk.principal,
             bm25(fts) as rank
         FROM fts f
         JOIN fts_index fi ON f.rowid = fi.rowid
         LEFT JOIN structural_blobs sb ON sb.id = fi.blob_id
-        LEFT JOIN resources r ON r.id = sb.resource
+        LEFT JOIN resources r1 ON r1.id = sb.resource
+        LEFT JOIN blob_links bl ON bl.target = fi.blob_id AND bl.type = 'ref/head'
+        LEFT JOIN structural_blobs sb_ref ON sb_ref.id = bl.source
+        LEFT JOIN resources r2 ON r2.id = sb_ref.resource
         LEFT JOIN public_keys pk ON pk.id = sb.author
         WHERE fts MATCH ?
         AND fi.type IN ({placeholders})
@@ -356,7 +362,7 @@ class HybridSearch:
                 "blob_id": row["blob_id"],
                 "block_id": row["block_id"],
                 "content_type": row["content_type"],
-                "text_snippet": row["raw_content"][:300] if row["raw_content"] else "",
+                "text_snippet": row["raw_content"][:100] if row["raw_content"] else "",
                 "version": row["version"] or "",
                 "keyword_score": normalized_score,
                 "timestamp": row["ts"],
@@ -499,8 +505,12 @@ class HybridSearch:
             for i, r in enumerate(results, 1):
                 lines.append(f"{i}. [{r.content_type}] {r.iri or 'N/A'}")
                 lines.append(f"   Score: {r.combined_score:.4f} (sem:{r.semantic_score:.3f} kw:{r.keyword_score:.3f})")
-                snippet = r.text_snippet[:100].replace('\n', ' ')
-                lines.append(f"   {snippet}...")
+                snippet = r.text_snippet.replace('\n', ' ')
+                max_len = 50
+                if len(snippet) > max_len:
+                    lines.append(f"   {snippet[:max_len]}...")
+                else:
+                    lines.append(f"   {snippet}")
                 lines.append("")
             return "\n".join(lines)
 

@@ -351,7 +351,7 @@ class SeedBlobDecoder:
         WHERE e.id IS NULL
         AND fi.type IN ({placeholders})
         AND f.raw_content != ''
-        AND length(f.raw_content) > 10
+        AND length(f.raw_content) > 3
         ORDER BY fi.ts DESC
         LIMIT ?
         """

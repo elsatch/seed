@@ -39,28 +39,41 @@ echo "Dependencies installed."
 # Detect database path
 echo
 echo "Checking database..."
-if [ "$(uname)" == "Darwin" ]; then
-    DB_PATH="$HOME/Library/Application Support/Seed/daemon/db/db.sqlite"
-else
-    DB_PATH="$HOME/.config/Seed/daemon/db/db.sqlite"
+
+# If DB_PATH is already set, treat it as an override. Otherwise compute platform default.
+if [ -z "${DB_PATH:-}" ]; then
+	UNAME_S="$(uname -s 2>/dev/null || echo "")"
+	case "$UNAME_S" in
+		Darwin)
+			DB_PATH="$HOME/Library/Application Support/seed-daemon/db/db.sqlite"
+			;;
+		MINGW*|MSYS*|CYGWIN*|Windows_NT)
+			DB_PATH="${APPDATA:-$HOME/AppData/Roaming}/seed-daemon/db/db.sqlite"
+			;;
+		*)
+			DB_PATH="$HOME/.config/Seed/daemon/db/db.sqlite"
+			;;
+	esac
 fi
 
 if [ -f "$DB_PATH" ]; then
-    echo "Database found: $DB_PATH"
+	echo "Database found: $DB_PATH"
+else
+	echo "Warning: database not found at: $DB_PATH"
+	echo "Tip: set DB_PATH to override, e.g. DB_PATH=/path/to/db.sqlite ./setup.sh"
+fi
 
-    # Run schema migration
-    echo "Running schema migration..."
-    python3 -c "
+echo "Running schema migration..."
+DB_PATH="$DB_PATH" python3 -c "
+import os
 from embed_indexer import EmbeddingIndexer
 from seed_decoder import DEFAULT_DB_PATH
-indexer = EmbeddingIndexer(DEFAULT_DB_PATH)
+
+db_path = os.environ.get('DB_PATH') or str(DEFAULT_DB_PATH)
+indexer = EmbeddingIndexer(db_path)
 indexer.ensure_schema()
 "
-    echo "Schema ready"
-else
-    echo "Warning: Database not found at: $DB_PATH"
-    echo "Make sure Seed app has run at least once"
-fi
+echo "Schema ready"
 
 echo
 echo "=== Setup Complete ==="

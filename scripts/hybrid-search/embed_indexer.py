@@ -186,7 +186,7 @@ class EmbeddingIndexer:
                 iri=r.get("iri")
             )
             for r in results
-            if r["raw_content"] and len(r["raw_content"]) > 10
+            if r["raw_content"] and len(r["raw_content"]) > 3
         ]
 
     def index_batch(self, content: List[ContentToEmbed]) -> Tuple[int, int]:
@@ -218,11 +218,11 @@ class EmbeddingIndexer:
         for item, embedding in zip(content, embeddings):
             content_hash = self._compute_content_hash(item.text)
 
-            # Check if already exists
+            # Check if already exists for this FTS entry
             cursor.execute("""
                 SELECT id FROM embeddings
-                WHERE content_hash = ? AND model = ?
-            """, [content_hash, self.model])
+                WHERE fts_rowid = ? AND model = ?
+            """, [item.fts_rowid, self.model])
 
             if cursor.fetchone():
                 skipped += 1
@@ -329,11 +329,16 @@ class EmbeddingIndexer:
         """).fetchall()
 
         # Pending (unembedded FTS entries for current model)
+        # Apply same filters as get_unembedded_fts_content to show accurate count
         pending = conn.execute("""
             SELECT COUNT(*)
             FROM fts_index fi
+            JOIN fts f ON f.rowid = fi.rowid
             LEFT JOIN embeddings e ON e.fts_rowid = fi.rowid AND e.model = ?
-            WHERE e.id IS NULL AND fi.type IN ('title', 'document', 'comment')
+            WHERE e.id IS NULL
+            AND fi.type IN ('title', 'document', 'comment')
+            AND f.raw_content != ''
+            AND length(f.raw_content) > 3
         """, [self.model]).fetchone()[0]
 
         conn.close()
@@ -384,7 +389,7 @@ Available models (HuggingFace):
                         help=f"Embedding model (default: {DEFAULT_MODEL})")
     parser.add_argument("--types", nargs="+", default=["title", "document", "comment"],
                         help="Content types to index")
-    parser.add_argument("--batch-size", type=int, default=50,
+    parser.add_argument("--batch-size", type=int, default=100,
                         help="Batch size for processing")
     parser.add_argument("--max", type=int, default=None,
                         help="Maximum items to index")
