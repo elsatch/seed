@@ -174,14 +174,17 @@ class HybridSearch:
                 fi.version,
                 fi.ts,
                 f.raw_content,
-                r.iri,
+                COALESCE(r1.iri, r2.iri) as iri,
                 pk.principal
             FROM vec_embeddings v
             JOIN embeddings e ON e.id = v.rowid
             JOIN fts_index fi ON fi.rowid = e.fts_rowid
             JOIN fts f ON f.rowid = fi.rowid
             LEFT JOIN structural_blobs sb ON sb.id = e.blob_id
-            LEFT JOIN resources r ON r.id = sb.resource
+            LEFT JOIN resources r1 ON r1.id = sb.resource
+            LEFT JOIN blob_links bl ON bl.target = e.blob_id AND bl.type = 'ref/head'
+            LEFT JOIN structural_blobs sb_ref ON sb_ref.id = bl.source
+            LEFT JOIN resources r2 ON r2.id = sb_ref.resource
             LEFT JOIN public_keys pk ON pk.id = sb.author
             WHERE v.embedding MATCH ?
             AND k = ?
@@ -190,7 +193,7 @@ class HybridSearch:
             ORDER BY v.distance
             """
 
-            params = [query_blob, limit * 2, self.model] + content_types
+            params = [query_blob, limit, self.model] + content_types
 
             try:
                 cursor = conn.execute(query_sql, params)
@@ -345,7 +348,7 @@ class HybridSearch:
         LIMIT ?
         """
 
-        params = [fts_query] + content_types + [limit * 2]
+        params = [fts_query] + content_types + [limit]
 
         try:
             cursor = conn.execute(query_sql, params)
