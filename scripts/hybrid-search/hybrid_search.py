@@ -8,6 +8,7 @@ Combines:
 Uses Reciprocal Rank Fusion (RRF) to combine results.
 """
 
+import os
 import sqlite3
 import json
 import struct
@@ -550,7 +551,7 @@ Examples:
                         help="Semantic weight for hybrid mode (0-1)")
     parser.add_argument("--format", choices=["json", "text"], default="text",
                         help="Output format")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH,
+    parser.add_argument("--db", type=Path, default=Path(os.environ.get("SEED_DB_PATH", str(DEFAULT_DB_PATH))),
                         help="Database path")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Embedding model")

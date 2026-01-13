@@ -367,7 +367,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Decode and extract Seed content")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH,
+    parser.add_argument("--db", type=Path, default=Path(os.environ.get("SEED_DB_PATH", DEFAULT_DB_PATH)),
                         help="Path to SQLite database")
     parser.add_argument("--limit", type=int, default=10,
                         help="Max items to show")

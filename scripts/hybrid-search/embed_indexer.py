@@ -7,6 +7,7 @@ Default: google/embeddinggemma-300m (Gemma embeddings)
 Manual trigger only - run when you want to index new content.
 """
 
+import os
 import sqlite3
 import hashlib
 import json
@@ -71,6 +72,8 @@ class SentenceTransformersBackend(EmbeddingBackend):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
             print(f"Loading model: {self.model_name}...")
+            from huggingface_hub import login
+            login(token=os.environ.get("HF_TOKEN"))
             self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
             # Update dimensions from actual model
             self._dimensions = self._model.get_sentence_embedding_dimension()
@@ -383,7 +386,7 @@ Available models (HuggingFace):
         """
     )
 
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH,
+    parser.add_argument("--db", type=Path, default=Path(os.environ.get("SEED_DB_PATH", DEFAULT_DB_PATH)),
                         help="Path to SQLite database")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                         help=f"Embedding model (default: {DEFAULT_MODEL})")

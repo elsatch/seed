@@ -40,36 +40,36 @@ echo "Dependencies installed."
 echo
 echo "Checking database..."
 
-# If DB_PATH is already set, treat it as an override. Otherwise compute platform default.
-if [ -z "${DB_PATH:-}" ]; then
+# If SEED_DB_PATH is already set, treat it as an override. Otherwise compute platform default.
+if [ -z "${SEED_DB_PATH:-}" ]; then
 	UNAME_S="$(uname -s 2>/dev/null || echo "")"
 	case "$UNAME_S" in
 		Darwin)
-			DB_PATH="$HOME/Library/Application Support/seed-daemon/db/db.sqlite"
+			SEED_DB_PATH="$HOME/Library/Application Support/seed-daemon/db/db.sqlite"
 			;;
 		MINGW*|MSYS*|CYGWIN*|Windows_NT)
-			DB_PATH="${APPDATA:-$HOME/AppData/Roaming}/seed-daemon/db/db.sqlite"
+			SEED_DB_PATH="${APPDATA:-$HOME/AppData/Roaming}/seed-daemon/db/db.sqlite"
 			;;
 		*)
-			DB_PATH="$HOME/.config/Seed/daemon/db/db.sqlite"
+			SEED_DB_PATH="$HOME/.config/Seed/daemon/db/db.sqlite"
 			;;
 	esac
 fi
 
-if [ -f "$DB_PATH" ]; then
-	echo "Database found: $DB_PATH"
+if [ -f "$SEED_DB_PATH" ]; then
+	echo "Database found: $SEED_DB_PATH"
 else
-	echo "Warning: database not found at: $DB_PATH"
-	echo "Tip: set DB_PATH to override, e.g. DB_PATH=/path/to/db.sqlite ./setup.sh"
+	echo "Warning: database not found at: $SEED_DB_PATH"
+	echo "Tip: set SEED_DB_PATH to override, e.g. SEED_DB_PATH=/path/to/db.sqlite ./setup.sh"
 fi
 
 echo "Running schema migration..."
-DB_PATH="$DB_PATH" python3 -c "
+SEED_DB_PATH="$SEED_DB_PATH" python3 -c "
 import os
 from embed_indexer import EmbeddingIndexer
 from seed_decoder import DEFAULT_DB_PATH
 
-db_path = os.environ.get('DB_PATH') or str(DEFAULT_DB_PATH)
+db_path = os.environ.get('SEED_DB_PATH') or str(DEFAULT_DB_PATH)
 indexer = EmbeddingIndexer(db_path)
 indexer.ensure_schema()
 "
