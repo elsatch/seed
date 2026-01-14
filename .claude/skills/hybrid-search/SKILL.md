@@ -1,6 +1,6 @@
 ---
 name: hybrid-search
-description: Hybrid search (semantic + keyword) over locally replicated Seed documents.Use when finding content by meaning, related documents, or exploring topics.
+description: Hybrid search (semantic + keyword) over local Seed documents. Use when finding content by meaning, related documents, or exploring topics.
 ---
 
 # Seed Hybrid Search
@@ -56,7 +56,7 @@ python hybrid_search.py "query" --weight 0.7       # More semantic
 
 ## Models 
 
-### (HuggingFace)
+### (_HuggingFace_)
 
 |             Model              |  Dimensions  |           Notes          |
 |--------------------------------|--------------|--------------------------|
@@ -69,8 +69,16 @@ In order to work with gated models, the user must define HF_TOKEN env var.
 containing the Hugging Face token. Use must log in into huggingface and 
 accept the license of the gated model before it can be used. 
 
-### Ollama
-Coming soon..
+### (_Ollama_)
+
+|             Model              |  Dimensions  |           Notes           |
+|--------------------------------|--------------|---------------------------|
+| `nomic-embed-text`             | 768          | good balance              |
+| `gemma2:2b`                    | 2048         | Higher quality, slower    |
+| `mxbai-embed-large`            | 1024         | Good alternative          |
+| `all-minilm`                   | 384          | Fast, lower quality       |
+| `all-MiniLM-L6-v2`             | 384          | Fallback option           |
+
 ## Output
 
 Text mode:

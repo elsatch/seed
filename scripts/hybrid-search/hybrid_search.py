@@ -12,6 +12,8 @@ import os
 import sqlite3
 import json
 import struct
+import re
+import hashlib
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
@@ -69,6 +71,19 @@ class HybridSearch:
         self.rrf_k = rrf_k  # RRF constant
         self._backend = None
         self._vec_table_checked = False
+        self._vec_table_name_cache: Optional[str] = None
+
+    def _vec_table_name(self, dimensions: int) -> str:
+        """Return a SQLite-safe, deterministic vec table name for the current model."""
+        if self._vec_table_name_cache is not None:
+            return self._vec_table_name_cache
+
+        safe = re.sub(r"[^0-9A-Za-z_]+", "_", self.model).strip("_")
+        if not safe:
+            safe = "model"
+        #suffix = hashlib.sha1(self.model.encode("utf-8")).hexdigest()[:8]
+        self._vec_table_name_cache = f"vec_embeddings_{safe}_{dimensions}"
+        return self._vec_table_name_cache
 
     def _get_backend(self):
         """Lazy-load embedding backend."""
@@ -93,41 +108,59 @@ class HybridSearch:
         return conn
 
     def _ensure_vec_table(self, dimensions: int):
-        """Ensure vec_embeddings virtual table exists with correct dimensions."""
+        """Ensure vec embeddings virtual table exists with correct dimensions."""
         if self._vec_table_checked:
             return
 
+        dimensions = int(dimensions)
         conn = self._get_connection(writable=True)
 
-        # Check if table exists
-        cursor = conn.execute("""
-            SELECT name FROM sqlite_master
-            WHERE type='table' AND name='vec_embeddings'
-        """)
+        table_name = self._vec_table_name(dimensions)
+        table_ident = '"' + table_name.replace('"', '""') + '"'
+
+        cursor = conn.execute(
+            """
+            SELECT type, name, sql
+            FROM sqlite_schema
+            WHERE type='table' AND name=?
+            """,
+            (table_name,),
+        )
 
         if not cursor.fetchone():
-            print(f"Creating vec_embeddings table with {dimensions} dimensions...")
-            conn.execute(f"""
-                CREATE VIRTUAL TABLE vec_embeddings USING vec0(
+            print(f"Creating {table_name} table with {dimensions} dimensions...")
+            conn.execute(
+                f"""
+                CREATE VIRTUAL TABLE {table_ident} USING vec0(
                     embedding float[{dimensions}]
                 )
-            """)
+                """
+            )
+        print("Checking for missing embeddings to populate vec table...")
+        cursor = conn.execute(
+            f"""
+            SELECT embed.id, embed.embedding
+            FROM embeddings embed
+            LEFT JOIN {table_ident} vec ON vec.rowid = embed.id
+            WHERE vec.rowid IS NULL
+              AND embed.model = ?
+            """,
+            (self.model,),
+        )
 
-            # Populate from existing embeddings
-            print("Populating vec_embeddings from existing embeddings...")
-            cursor = conn.execute("""
-                SELECT id, embedding FROM embeddings WHERE model = ?
-            """, [self.model])
-
-            for row in cursor:
+        rows = cursor.fetchall()
+        if not rows:
+            print("No missing embeddings to populate vec table.")
+        else:
+            print(f"Populating {table_name} from existing embeddings, with {len(rows)} rows")
+            for row in rows:
                 conn.execute(
-                    "INSERT INTO vec_embeddings(rowid, embedding) VALUES (?, ?)",
-                    [row["id"], row["embedding"]]
+                    f"INSERT INTO {table_ident}(rowid, embedding) VALUES (?, ?)",
+                    (row["id"], row["embedding"]),
                 )
 
-            conn.commit()
-            print("vec_embeddings table ready.")
-
+        conn.commit()
+        print(f"{table_name} table ready.")
         conn.close()
         self._vec_table_checked = True
 
@@ -152,7 +185,6 @@ class HybridSearch:
         backend = self._get_backend()
         query_embedding = backend.embed([query])[0]
         dimensions = len(query_embedding)
-
         # Ensure vec table exists
         if HAS_SQLITE_VEC:
             self._ensure_vec_table(dimensions)
@@ -160,9 +192,9 @@ class HybridSearch:
         conn = self._get_connection()
 
         if HAS_SQLITE_VEC:
-            # Use sqlite-vec for fast KNN search
             query_blob = serialize_float32(query_embedding)
             placeholders = ",".join("?" * len(content_types))
+            vec_table = self._vec_table_name(dimensions)
 
             query_sql = f"""
             SELECT
@@ -176,7 +208,7 @@ class HybridSearch:
                 f.raw_content,
                 COALESCE(r1.iri, r2.iri) as iri,
                 pk.principal
-            FROM vec_embeddings v
+            FROM {vec_table} v
             JOIN embeddings e ON e.id = v.rowid
             JOIN fts_index fi ON fi.rowid = e.fts_rowid
             JOIN fts f ON f.rowid = fi.rowid
@@ -187,9 +219,9 @@ class HybridSearch:
             LEFT JOIN resources r2 ON r2.id = sb_ref.resource
             LEFT JOIN public_keys pk ON pk.id = sb.author
             WHERE v.embedding MATCH ?
-            AND k = ?
-            AND e.model = ?
-            AND e.content_type IN ({placeholders})
+              AND k = ?
+              AND e.model = ?
+              AND e.content_type IN ({placeholders})
             ORDER BY v.distance
             """
 

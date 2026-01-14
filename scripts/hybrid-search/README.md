@@ -6,7 +6,7 @@ Hybrid semantic + keyword search over locally replicated Seed documents using [s
 
 - **Hybrid retrieval**: Combines vector embeddings (semantic) with FTS5 (keyword) using Reciprocal Rank Fusion
 - **Fast vector search**: Uses sqlite-vec for efficient KNN queries
-- **HuggingFace models**: EmbeddingGemma (default), BGE-M3, Qwen3-Embedding
+- **Multiple embedding backends**: Ollama (Gemma, nomic-embed-text) or sentence-transformes HuggingFace models (EmbeddingGemma, BGE-M3, Qwen3-Embedding)
 - **Indexes documents & comments**: Extracts text from Change and Comment blobs
 
 ## Prerequisites
@@ -81,26 +81,31 @@ python hybrid_search.py "query" --weight 0.7
 
 ## Database Locations
 
-| Platform | Path |
-|----------|------|
-| Linux | `~/.config/Seed/daemon/db/db.sqlite` |
-| macOS | `~/Library/Application Support/Seed/daemon/db/db.sqlite` |
-| Windows | `%APPDATA%/Seed/daemon/db/db.sqlite` |
+| Platform |                          Path                              |
+|----------|------------------------------------------------------------|
+| Linux    | `~/.config/Seed/daemon/db/db.sqlite`                       |
+| macOS    | `~/Library/Application Support/Seed/daemon/db/db.sqlite`   |
+| Windows  | `%APPDATA%/Seed/daemon/db/db.sqlite`                       |
 
 ## Embedding Models
 
-| Model | Dimensions | Size | Notes |
-|-------|------------|------|-------|
-| [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) | 768 | 300M | **Default**, Gemma-based, MRL support |
-| [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | 1024 | 568M | Multilingual, 100+ languages |
-| [Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) | 1024 | 0.6B | Good balance |
-| [Qwen/Qwen3-Embedding-8B](https://huggingface.co/Qwen/Qwen3-Embedding-8B) | 4096 | 8B | Highest quality |
+| Model | Backend | Dimensions | Size | Notes |
+|-------|---------|------------|------|-------|
+| [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) | sentence-transformers | 768 | 300M | Gemma-based, MRL support |
+| [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | sentence-transformers | 1024 | 568M | Multilingual, 100+ languages |
+| [Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) | sentence-transformers | 1024 | 0.6B | Good balance |
+| [Qwen/Qwen3-Embedding-8B](https://huggingface.co/Qwen/Qwen3-Embedding-8B) | sentence-transformers | 4096 | 8B | Highest quality |
+| `nomic-embed-text` | Ollama | 768 | | **Default**, good balance |
+| `gemma2:2b` | Ollama | 2048 | | Higher quality, slower |
+| `mxbai-embed-large` | Ollama | 1024 | | Good alternative |
+| `all-minilm` | Ollama | 384 | | Fast, lower quality |
+| `all-MiniLM-L6-v2` | sentence-transformers | 384 | | Fallback option |
 
 ## How It Works
 
 1. **Blob Decoding**: Reads Zstd-compressed DAG-CBOR blobs from Seed's SQLite database
 2. **Text Extraction**: Extracts text from Change (document) and Comment blobs
-3. **Embedding**: Generates vector embeddings using HuggingFace models via sentence-transformers
+3. **Embedding**: Generates vector embeddings using Ollama or sentence-transformers
 4. **Vector Index**: Stores embeddings in sqlite-vec virtual table for fast KNN search
 5. **Hybrid Search**: Combines vector similarity + FTS5 BM25 using Reciprocal Rank Fusion
 

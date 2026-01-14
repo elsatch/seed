@@ -1,8 +1,10 @@
 """
 embed_indexer.py - Generate embeddings for Seed content
 
-Uses sentence-transformers with HuggingFace models.
-Default: google/embeddinggemma-300m (Gemma embeddings)
+Supports multiple embedding backends:
+- Ollama (less overhead, local models)
+- Sentence-transformers via HuggingFace(fallback)
+google/embeddinggemma-300m (Gemma embeddings)
 
 Manual trigger only - run when you want to index new content.
 """
@@ -12,6 +14,7 @@ import sqlite3
 import hashlib
 import json
 import struct
+import requests
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -22,17 +25,22 @@ from seed_decoder import SeedBlobDecoder, DEFAULT_DB_PATH
 
 # Embedding model configurations (HuggingFace models via sentence-transformers)
 EMBEDDING_CONFIGS = {
-    # Google EmbeddingGemma - best-in-class for size, MRL support
-    "google/embeddinggemma-300m": {"dimensions": 768},
-    # BAAI BGE-M3 - multilingual, multi-functionality
-    "BAAI/bge-m3": {"dimensions": 1024},
-    # Qwen3 Embedding models
-    "Qwen/Qwen3-Embedding-0.6B": {"dimensions": 1024},
-    "Qwen/Qwen3-Embedding-8B": {"dimensions": 4096},
+    # Ollama models
+    "gemma2:2b": {"backend": "ollama", "dimensions": 2048},
+    "gemma:2b": {"backend": "ollama", "dimensions": 2048},
+    "nomic-embed-text": {"backend": "ollama", "dimensions": 768},
+    "mxbai-embed-large": {"backend": "ollama", "dimensions": 1024},
+    "all-minilm": {"backend": "ollama", "dimensions": 384},
+
+    # Sentence-transformers models
+    "google/embeddinggemma-300m": {"backend": "sentence-transformers", "dimensions": 768},
+    "BAAI/bge-m3": {"backend": "sentence-transformers", "dimensions": 1024},
+    "Qwen/Qwen3-Embedding-0.6B": {"backend": "sentence-transformers", "dimensions": 1024},
+    "Qwen/Qwen3-Embedding-8B": {"backend": "sentence-transformers", "dimensions": 4096},
 }
 
-# Default: Google EmbeddingGemma (Gemma-based, 768d, efficient)
-DEFAULT_MODEL = "google/embeddinggemma-300m"
+# Default: nomic-embed-text (Ollama, 768d, efficient)
+DEFAULT_MODEL = "nomic-embed-text"
 
 
 @dataclass
@@ -60,6 +68,59 @@ class EmbeddingBackend(ABC):
         pass
 
 
+class OllamaBackend(EmbeddingBackend):
+    """Ollama embedding backend - supports Gemma and other local models."""
+
+    def __init__(self, model: str, base_url: str = "http://localhost:11434"):
+        self.model_name = model
+        self.base_url = base_url
+        self._dimensions = EMBEDDING_CONFIGS.get(model, {}).get("dimensions", 768)
+
+        # Verify Ollama is running and model is available
+        self._verify_model()
+
+    def _load_model(self):
+        print(f"Model {self.model_name} loaded. Dimensions: {self._dimensions}")
+    
+    def _verify_model(self):
+        """Check if Ollama is running and model is available."""
+        try:
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            response.raise_for_status()
+            models = [m["name"].split(":")[0] for m in response.json().get("models", [])]
+
+            model_base = self.model_name.split(":")[0]
+            if model_base not in models and self.model_name not in [m["name"] for m in response.json().get("models", [])]:
+                print(f"Warning: Model '{self.model_name}' not found. Available: {models}")
+                print(f"Pull it with: ollama pull {self.model_name}")
+
+        except requests.RequestException as e:
+            raise ConnectionError(f"Ollama not running at {self.base_url}: {e}")
+
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings using Ollama API."""
+        embeddings = []
+
+        for text in texts:
+            response = requests.post(
+                f"{self.base_url}/api/embeddings",
+                json={"model": self.model_name, "prompt": text},
+                timeout=30
+            )
+            response.raise_for_status()
+            embedding = response.json()["embedding"]
+            embeddings.append(embedding)
+
+            # Update dimensions from actual response
+            if len(embedding) != self._dimensions:
+                self._dimensions = len(embedding)
+
+        return embeddings
+
+    def get_dimensions(self) -> int:
+        return self._dimensions
+
+
 class SentenceTransformersBackend(EmbeddingBackend):
     """HuggingFace models via sentence-transformers."""
 
@@ -71,13 +132,8 @@ class SentenceTransformersBackend(EmbeddingBackend):
     def _load_model(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
-            print(f"Loading model: {self.model_name}...")
-            from huggingface_hub import login
-            login(token=os.environ.get("HF_TOKEN"))
             self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
-            # Update dimensions from actual model
-            self._dimensions = self._model.get_sentence_embedding_dimension()
-            print(f"Model loaded. Dimensions: {self._dimensions}")
+            print(f"Model {self.model_name} loaded. Dimensions: {self._dimensions}")
         return self._model
 
     def embed(self, texts: List[str]) -> List[List[float]]:
@@ -92,8 +148,17 @@ class SentenceTransformersBackend(EmbeddingBackend):
 
 
 def get_embedding_backend(model: str) -> EmbeddingBackend:
-    """Get embedding backend for the specified model."""
-    return SentenceTransformersBackend(model)
+    """Factory function to get appropriate embedding backend."""
+    config = EMBEDDING_CONFIGS.get(model, {})
+    backend_type = config.get("backend", "ollama")
+
+    if backend_type == "ollama":
+        return OllamaBackend(model)
+    elif backend_type == "sentence-transformers":
+        return SentenceTransformersBackend(model)
+    else:
+        # Default to Ollama
+        return OllamaBackend(model)
 
 
 class EmbeddingIndexer:
@@ -363,7 +428,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Index with default model (EmbeddingGemma)
+  # Index with default model (nomic-embed-text via Ollama)
   python embed_indexer.py
 
   # Index with BGE-M3 model
@@ -378,8 +443,15 @@ Examples:
   # Show statistics only
   python embed_indexer.py --stats
 
-Available models (HuggingFace):
-  - google/embeddinggemma-300m (768d, default, Gemma-based)
+Available models:
+  Ollama (local):
+    - nomic-embed-text (768d, default)
+    - gemma2:2b (2048d)
+    - mxbai-embed-large (1024d)
+    - all-minilm (384d)
+
+  Sentence-transformers via HuggingFace:
+  - google/embeddinggemma-300m (768d, Gemma-based)
   - BAAI/bge-m3 (1024d, multilingual)
   - Qwen/Qwen3-Embedding-0.6B (1024d)
   - Qwen/Qwen3-Embedding-8B (4096d, high quality)
