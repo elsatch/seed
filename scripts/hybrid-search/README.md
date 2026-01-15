@@ -6,7 +6,7 @@ Hybrid semantic + keyword search over locally replicated Seed documents using [s
 
 - **Hybrid retrieval**: Combines vector embeddings (semantic) with FTS5 (keyword) using Reciprocal Rank Fusion
 - **Fast vector search**: Uses sqlite-vec for efficient KNN queries
-- **Multiple embedding backends**: Ollama (Gemma, nomic-embed-text) or sentence-transformes HuggingFace models (EmbeddingGemma, BGE-M3, Qwen3-Embedding)
+- **Multiple embedding backends**: Ollama or sentence-transformers (HuggingFace), with any compatible model name
 - **Indexes documents & comments**: Extracts text from Change and Comment blobs
 
 ## Prerequisites
@@ -26,7 +26,7 @@ This will:
 - Create a Python virtual environment
 - Install dependencies (sentence-transformers, torch, sqlite-vec)
 
-**Note:** First run will download the embedding model (~600MB for EmbeddingGemma).
+**Note:** First run may download the embedding model depending on the backend.
 
 ## Usage
 
@@ -42,12 +42,15 @@ source .venv/bin/activate
 First run creates the sqlite-vec table for the selected model.
 
 ```bash
-# Index with default model (EmbeddingGemma)
+# Index with default model (sentence-transformers)
 python embed_indexer.py
 
-# Index with specific model
+# Index with a specific sentence-transformers model
 python embed_indexer.py --model BAAI/bge-m3
 python embed_indexer.py --model Qwen/Qwen3-Embedding-0.6B
+
+# Use Ollama backend (model will be pulled automatically)
+python embed_indexer.py --ollama --model nomic-embed-text
 
 # Index only titles
 python embed_indexer.py --types title
@@ -91,17 +94,10 @@ python hybrid_search.py "query" --weight 0.7
 
 ## Embedding Models
 
-| Model                                                                           | Backend               | Dimensions | Size | Notes                        |
-| ------------------------------------------------------------------------------- | --------------------- | ---------- | ---- | ---------------------------- |
-| [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) | sentence-transformers | 768        | 300M | Gemma-based, MRL support     |
-| [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3)                               | sentence-transformers | 1024       | 568M | Multilingual, 100+ languages |
-| [Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)   | sentence-transformers | 1024       | 0.6B | Good balance                 |
-| [Qwen/Qwen3-Embedding-8B](https://huggingface.co/Qwen/Qwen3-Embedding-8B)       | sentence-transformers | 4096       | 8B   | Highest quality              |
-| `nomic-embed-text`                                                              | Ollama                | 768        |      | **Default**, good balance    |
-| `gemma2:2b`                                                                     | Ollama                | 2048       |      | Higher quality, slower       |
-| `mxbai-embed-large`                                                             | Ollama                | 1024       |      | Good alternative             |
-| `all-minilm`                                                                    | Ollama                | 384        |      | Fast, lower quality          |
-| `all-MiniLM-L6-v2`                                                              | sentence-transformers | 384        |      | Fallback option              |
+This tool does not enforce a fixed list of models. Use any compatible model name:
+
+- **Sentence-transformers**: Any model available on HuggingFace supported by `sentence-transformers`.
+- **Ollama**: Any model name supported by Ollama; it will be pulled automatically when indexing.
 
 ## How It Works
 
@@ -139,7 +135,7 @@ brew install python
 
 ### Model download slow
 
-First run downloads the model from HuggingFace. This can take a few minutes depending on your connection.
+First run may download the model from HuggingFace or Ollama. This can take a few minutes depending on your connection.
 
 ### Out of memory
 
@@ -157,6 +153,4 @@ Ensure Seed desktop app has run at least once to create the database.
 
 - [sqlite-vec documentation](https://alexgarcia.xyz/sqlite-vec/)
 - [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m)
-- [BGE-M3](https://huggingface.co/BAAI/bge-m3)
-- [Qwen3-Embedding](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)
 - [Seed Hypermedia](https://seed.hyper.media/)

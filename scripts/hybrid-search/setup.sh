@@ -63,18 +63,6 @@ else
 	echo "Tip: set SEED_DB_PATH to override, e.g. SEED_DB_PATH=/path/to/db.sqlite ./setup.sh"
 fi
 
-echo "Running schema migration..."
-SEED_DB_PATH="$SEED_DB_PATH" python3 -c "
-import os
-from embed_indexer import EmbeddingIndexer
-from seed_decoder import DEFAULT_DB_PATH
-
-db_path = os.environ.get('SEED_DB_PATH') or str(DEFAULT_DB_PATH)
-indexer = EmbeddingIndexer(db_path)
-indexer.ensure_schema()
-"
-echo "Schema ready"
-
 echo
 echo "=== Setup Complete ==="
 echo
@@ -87,10 +75,4 @@ echo "  python embed_indexer.py"
 echo
 echo "  # Search"
 echo "  python hybrid_search.py 'your query'"
-echo
-echo "Available models:"
-echo "  - google/embeddinggemma-300m (default, Gemma-based)"
-echo "  - BAAI/bge-m3 (multilingual)"
-echo "  - Qwen/Qwen3-Embedding-0.6B"
-echo "  - Qwen/Qwen3-Embedding-8B (high quality)"
 echo

@@ -12,6 +12,7 @@ import os
 import sqlite3
 import json
 import struct
+import time
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
@@ -65,11 +66,13 @@ class HybridSearch:
         self,
         db_path: Path = DEFAULT_DB_PATH,
         model: str = DEFAULT_MODEL,
-        rrf_k: int = 60
+        rrf_k: int = 60,
+        verbose: bool = False,
     ):
         self.db_path = Path(db_path)
         self.model = model
         self.rrf_k = rrf_k  # RRF constant
+        self.verbose = verbose
         self._backend = None
 
     def _quote_ident(self, ident: str) -> str:
@@ -77,7 +80,7 @@ class HybridSearch:
 
     def _assert_vec_table_exists(self, conn: sqlite3.Connection, dimensions: int) -> str:
         """Return quoted vec table ident, or raise if missing."""
-        table_name = vec_table_name(self.model, dimensions)
+        table_name = vec_table_name(self.model, dimensions, self._get_backend().get_name())
         row = conn.execute(
             """
             SELECT name
@@ -97,7 +100,7 @@ class HybridSearch:
     def _get_backend(self):
         """Lazy-load embedding backend."""
         if self._backend is None:
-            self._backend = get_embedding_backend(self.model)
+            self._backend = get_embedding_backend(self.model, verbose=self.verbose)
         return self._backend
 
     def _get_connection(self, writable: bool = False) -> sqlite3.Connection:
@@ -130,8 +133,9 @@ class HybridSearch:
         """
         Perform semantic search using sqlite-vec for fast KNN.
         """
+        overall_start = time.perf_counter()
         if content_types is None:
-            content_types = ['title', 'document', 'comment']
+            content_types = CONTENT_TYPES
 
         if not HAS_SQLITE_VEC:
             raise RuntimeError(
@@ -139,11 +143,15 @@ class HybridSearch:
             )
 
         backend = self._get_backend()
+        embed_start = time.perf_counter()
         query_embedding = backend.embed([query])[0]
+        embed_duration = time.perf_counter() - embed_start
         dimensions = len(query_embedding)
 
+        conn_start = time.perf_counter()
         conn = self._get_connection()
         table_ident = self._assert_vec_table_exists(conn, dimensions)
+        conn_duration = time.perf_counter() - conn_start
 
         query_blob = serialize_float32(query_embedding)
         placeholders = ",".join("?" * len(content_types))
@@ -177,6 +185,7 @@ class HybridSearch:
 
         params = [query_blob, limit] + content_types
 
+        query_start = time.perf_counter()
         try:
             cursor = conn.execute(query_sql, params)
         except sqlite3.OperationalError as e:
@@ -184,6 +193,7 @@ class HybridSearch:
             raise RuntimeError(f"sqlite-vec query error: {e}") from e
 
         results = []
+        rows_start = time.perf_counter()
         for row in cursor:
             distance = row["distance"]
             similarity = 1.0 / (1.0 + distance)
@@ -200,6 +210,18 @@ class HybridSearch:
             })
 
         conn.close()
+        rows_duration = time.perf_counter() - rows_start
+        query_duration = time.perf_counter() - query_start
+        overall_duration = time.perf_counter() - overall_start
+        if self.verbose:
+            print(
+                "semantic_search timings: "
+                f"embed={embed_duration:.3f}s, "
+                f"conn+table={conn_duration:.3f}s, "
+                f"query={query_duration:.3f}s, "
+                f"rows={rows_duration:.3f}s, "
+                f"total={overall_duration:.3f}s"
+            )
         return results[:limit]
 
     def _semantic_search_brute_force(
@@ -210,7 +232,7 @@ class HybridSearch:
     ) -> List[Dict]:
         """Fallback brute-force cosine similarity search."""
         import math
-
+        print("Using brute-force semantic search (no sqlite-vec)")
         def cosine_similarity(a: List[float], b: List[float]) -> float:
             dot = sum(x * y for x, y in zip(a, b))
             norm_a = math.sqrt(sum(x * x for x in a))
@@ -279,7 +301,7 @@ class HybridSearch:
     ) -> List[Dict]:
         """Perform keyword search using FTS5."""
         if content_types is None:
-            content_types = ['title', 'document', 'comment']
+            content_types = CONTENT_TYPES
 
         conn = self._get_connection()
 
@@ -360,7 +382,7 @@ class HybridSearch:
         Uses Reciprocal Rank Fusion (RRF) to combine results.
         """
         if content_types is None:
-            content_types = ['title', 'document', 'comment']
+            content_types = CONTENT_TYPES
 
         semantic_results = self.semantic_search(query, limit * 2, content_types)
         keyword_results = self.keyword_search(query, limit * 2, content_types)
@@ -439,7 +461,7 @@ class HybridSearch:
     ) -> str:
         """Main search entry point."""
         if content_types is None:
-            content_types = ['title', 'document', 'comment']
+            content_types = CONTENT_TYPES
 
         if mode == "semantic":
             results = self.semantic_search(query, limit, content_types)
@@ -520,7 +542,7 @@ Examples:
     parser.add_argument("--mode", choices=["hybrid", "semantic", "keyword"],
                         default="hybrid", help="Search mode")
     parser.add_argument("--limit", type=int, default=20, help="Max results")
-    parser.add_argument("--types", nargs="+", default=["title", "document", "comment"],
+    parser.add_argument("--types", nargs="+", default=CONTENT_TYPES, choices=CONTENT_TYPES,
                         help="Content types to search")
     parser.add_argument("--weight", type=float, default=0.5,
                         help="Semantic weight for hybrid mode (0-1)")
@@ -530,10 +552,12 @@ Examples:
                         help="Database path")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Embedding model")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Enable verbose timing traces")
 
     args = parser.parse_args()
 
-    search = HybridSearch(args.db, args.model)
+    search = HybridSearch(args.db, args.model, verbose=args.verbose)
 
     output = search.search(
         args.query,

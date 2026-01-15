@@ -15,6 +15,8 @@ import json
 import struct
 import requests
 import re
+import time
+import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -29,34 +31,18 @@ except ImportError:
 from seed_decoder import DEFAULT_DB_PATH
 
 
-# Embedding model configurations (HuggingFace models via sentence-transformers)
-EMBEDDING_CONFIGS = {
-    # Ollama models
-    "gemma2:2b": {"backend": "ollama", "dimensions": 2048},
-    "gemma:2b": {"backend": "ollama", "dimensions": 2048},
-    "nomic-embed-text": {"backend": "ollama", "dimensions": 768},
-    "mxbai-embed-large": {"backend": "ollama", "dimensions": 1024},
-    "all-minilm": {"backend": "ollama", "dimensions": 384},
-
-    # Sentence-transformers models
-    "google/embeddinggemma-300m": {"backend": "sentence-transformers", "dimensions": 768},
-    "BAAI/bge-m3": {"backend": "sentence-transformers", "dimensions": 1024},
-    "Qwen/Qwen3-Embedding-0.6B": {"backend": "sentence-transformers", "dimensions": 1024},
-    "Qwen/Qwen3-Embedding-8B": {"backend": "sentence-transformers", "dimensions": 4096},
-}
-
-# Default: nomic-embed-text (Ollama, 768d, efficient)
-DEFAULT_MODEL = "nomic-embed-text"
+# Default: sentence-transformers (HuggingFace)
+DEFAULT_MODEL = "google/embeddinggemma-300m"
 # Content type to index
 CONTENT_TYPES = ['title', 'document', 'comment']
 
 
-def vec_table_name(model: str, dimensions: int) -> str:
+def vec_table_name(model: str, dimensions: int, backend: str) -> str:
     """Return a SQLite-safe, deterministic vec table name for (model, dimensions)."""
     safe = re.sub(r"[^0-9A-Za-z_]+", "_", model).strip("_")
     if not safe:
-        safe = "model"
-    return f"vec_embeddings_{safe}_{int(dimensions)}"
+        raise ValueError(f"Cannot create safe table name from model: {model}")
+    return f"vec_embeddings_{backend}_{safe}_{int(dimensions)}"
 
 
 def quote_ident(ident: str) -> str:
@@ -86,98 +72,165 @@ class EmbeddingBackend(ABC):
         """Return embedding dimensions."""
         pass
 
+    @abstractmethod
+    def get_name(self) -> str:
+        """Return backend name."""
+        pass
+
 
 class OllamaBackend(EmbeddingBackend):
     """Ollama embedding backend - supports Gemma and other local models."""
 
-    def __init__(self, model: str, base_url: str = "http://localhost:11434"):
+    def __init__(self, model: str, base_url: str = "http://localhost:11434", verbose: bool = False):
         self.model_name = model
         self.base_url = base_url
-        self._dimensions = EMBEDDING_CONFIGS.get(model, {}).get("dimensions", 768)
+        self.verbose = verbose
+        self._dimensions: Optional[int] = None
+        self._backend_name: str = "ollama"
+
+        self._pull_model()
 
         # Verify Ollama is running and model is available
         self._verify_model()
-
-    def _load_model(self):
-        print(f"Model {self.model_name} loaded. Dimensions: {self._dimensions}")
+        self._infer_dimensions()
     
+    def get_name(self) -> str:
+        return self._backend_name
+
+    def _pull_model(self):
+        """Pull the model using the local Ollama CLI."""
+        try:
+            subprocess.run(["ollama", "pull", self.model_name], check=True)
+        except FileNotFoundError as e:
+            raise RuntimeError("ollama CLI not found. Install Ollama or remove --pull.") from e
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to pull model '{self.model_name}'.") from e
+
     def _verify_model(self):
         """Check if Ollama is running and model is available."""
         try:
             response = requests.get(f"{self.base_url}/api/tags", timeout=5)
             response.raise_for_status()
-            models = [m["name"].split(":")[0] for m in response.json().get("models", [])]
-
+            model_entries = response.json().get("models", [])
+            model_names = [m.get("name", "") for m in model_entries]
             model_base = self.model_name.split(":")[0]
-            if model_base not in models and self.model_name not in [m["name"] for m in response.json().get("models", [])]:
-                print(f"Warning: Model '{self.model_name}' not found. Available: {models}")
-                print(f"Pull it with: ollama pull {self.model_name}")
+            available = any(
+                name == self.model_name
+                or name.split(":")[0] == self.model_name
+                or name.split(":")[0] == model_base
+                for name in model_names
+            )
+            if not available:
+                available_list = ", ".join(sorted({n for n in model_names if n}))
+                raise RuntimeError(
+                    f"Model '{self.model_name}' not found in Ollama. "
+                    f"Available: {available_list or 'none'}. "
+                    f"Use --pull to fetch it."
+                )
 
         except requests.RequestException as e:
             raise ConnectionError(f"Ollama not running at {self.base_url}: {e}")
 
+    def _infer_dimensions(self):
+        """Infer embedding dimensions from a minimal embeddings request."""
+        if self._dimensions is not None:
+            return
+        response = requests.post(
+            f"{self.base_url}/api/embed",
+            json={"model": self.model_name, "input": " "},
+            timeout=30,
+        )
+        response.raise_for_status()
+        embedding = response.json().get("embeddings")
+        if not embedding or not isinstance(embedding, list) or len(embedding) != 1 or not isinstance(embedding[0], list):
+            raise RuntimeError(f"Failed to infer dimensions for '{self.model_name}'.")
+        self._dimensions = len(embedding[0])
+
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using Ollama API."""
+        overall_start = time.perf_counter()
         embeddings = []
+        request_total = 0.0
+        request_start = time.perf_counter()
+        response = requests.post(
+            f"{self.base_url}/api/embed",
+            json={"model": self.model_name, "input": texts},
+            timeout=300
+        )
+        response.raise_for_status()
+        
+        embeddings = response.json()["embeddings"]
 
-        for text in texts:
-            response = requests.post(
-                f"{self.base_url}/api/embeddings",
-                json={"model": self.model_name, "prompt": text},
-                timeout=30
+        request_total += time.perf_counter() - request_start
+
+        overall_duration = time.perf_counter() - overall_start
+        if self.verbose:
+            print(
+                "ollama embed timings: "
+                f"requests={request_total:.3f}s, total={overall_duration:.3f}s"
             )
-            response.raise_for_status()
-            embedding = response.json()["embedding"]
-            embeddings.append(embedding)
-
-            # Update dimensions from actual response
-            if len(embedding) != self._dimensions:
-                self._dimensions = len(embedding)
-
         return embeddings
 
     def get_dimensions(self) -> int:
+        if self._dimensions is None:
+            self._infer_dimensions()
         return self._dimensions
 
 
 class SentenceTransformersBackend(EmbeddingBackend):
     """HuggingFace models via sentence-transformers."""
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, verbose: bool = False):
         self.model_name = model
+        self.verbose = verbose
         self._model = None
-        self._dimensions = EMBEDDING_CONFIGS.get(model, {}).get("dimensions", 768)
+        self._dimensions = None
+        self._backend_name: str = "sentence-transformers"
 
+    def get_name(self) -> str:
+        return self._backend_name
+    
     def _load_model(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
-            print(f"Model {self.model_name} loaded. Dimensions: {self._dimensions}")
+            self._dimensions = self._model.get_sentence_embedding_dimension()
+            print(f"Model {self.model_name} loaded into {self._model.device}. Dimensions: {self._dimensions}")
         return self._model
 
     def embed(self, texts: List[str]) -> List[List[float]]:
+        overall_start = time.perf_counter()
+        load_start = time.perf_counter()
         model = self._load_model()
+        load_duration = time.perf_counter() - load_start
+        encode_start = time.perf_counter()
         embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        encode_duration = time.perf_counter() - encode_start
+        overall_duration = time.perf_counter() - overall_start
+        if self.verbose:
+            print(
+                "sentence-transformers embed timings: "
+                f"load={load_duration:.3f}s, "
+                f"encode={encode_duration:.3f}s, "
+                f"total={overall_duration:.3f}s"
+            )
         return [e.tolist() for e in embeddings]
 
     def get_dimensions(self) -> int:
         if self._model is None:
-            return self._dimensions
+            self._load_model()
         return self._model.get_sentence_embedding_dimension()
 
 
-def get_embedding_backend(model: str) -> EmbeddingBackend:
+def get_embedding_backend(
+    model: str,
+    use_ollama: bool = False,
+    verbose: bool = False,
+) -> EmbeddingBackend:
     """Factory function to get appropriate embedding backend."""
-    config = EMBEDDING_CONFIGS.get(model, {})
-    backend_type = config.get("backend", "ollama")
-
-    if backend_type == "ollama":
-        return OllamaBackend(model)
-    elif backend_type == "sentence-transformers":
-        return SentenceTransformersBackend(model)
-    else:
-        # Default to Ollama
-        return OllamaBackend(model)
+    if use_ollama:
+        return OllamaBackend(model, verbose=verbose)
+    return SentenceTransformersBackend(model, verbose=verbose)
 
 
 class EmbeddingIndexer:
@@ -186,17 +239,25 @@ class EmbeddingIndexer:
     def __init__(
         self,
         db_path: Path = DEFAULT_DB_PATH,
-        model: str = DEFAULT_MODEL
+        model: str = DEFAULT_MODEL,
+        use_ollama: bool = False,
+        verbose: bool = False,
     ):
         self.db_path = Path(db_path)
         self.model = model
+        self.use_ollama = use_ollama
+        self.verbose = verbose
         self._backend: Optional[EmbeddingBackend] = None
         self._vec_table_name_cache: dict[int, str] = {}
 
     def _get_backend(self) -> EmbeddingBackend:
         """Lazy-load embedding backend."""
         if self._backend is None:
-            self._backend = get_embedding_backend(self.model)
+            self._backend = get_embedding_backend(
+                self.model,
+                self.use_ollama,
+                verbose=self.verbose,
+            )
         return self._backend
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -227,7 +288,7 @@ class EmbeddingIndexer:
         if cached is not None:
             return cached
 
-        name = vec_table_name(self.model, dimensions)
+        name = vec_table_name(self.model, dimensions, self._get_backend().get_name())
         self._vec_table_name_cache[dimensions] = name
         return name
 
@@ -358,6 +419,7 @@ class EmbeddingIndexer:
         while True:
             if max_items and total_indexed >= max_items:
                 break
+            batch_start = time.perf_counter()
             remaining = batch_size if not max_items else min(batch_size, max_items - total_indexed)
             pending = self.get_pending_content(
                 table_ident,
@@ -369,8 +431,10 @@ class EmbeddingIndexer:
             indexed, skipped = self.index_batch(pending, backend, table_ident)
             total_indexed += indexed
             total_skipped += skipped
+            batch_duration = time.perf_counter() - batch_start
             print(f"  Indexed: {indexed}, Skipped: {skipped}")
             print(f"  Total: {total_indexed} indexed, {total_skipped} skipped")
+            print(f"  Batch total time: {batch_duration:.2f}s")
         return total_indexed, total_skipped
 
     def get_stats(self) -> dict:
@@ -393,7 +457,8 @@ class EmbeddingIndexer:
                 rowid
             FROM {table_ident}
         """
-        pending = conn.execute(pending_query, (*CONTENT_TYPES,)).fetchone()[0]
+        pending_row = conn.execute(pending_query, (*CONTENT_TYPES,)).fetchone()
+        pending = pending_row[0] if pending_row is not None else 0
 
         conn.close()
         return {
@@ -410,42 +475,33 @@ def main():
     parser = argparse.ArgumentParser(
         description="Index Seed content embeddings",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+                epilog="""
 Examples:
-  # Index with default model (nomic-embed-text via Ollama)
-  python embed_indexer.py
+    # Index with default model (sentence-transformers)
+    python embed_indexer.py
 
-  # Index with BGE-M3 model
-  python embed_indexer.py --model BAAI/bge-m3
+    # Index with BGE-M3 model
+    python embed_indexer.py --model BAAI/bge-m3
 
-  # Index with Qwen3 Embedding
-  python embed_indexer.py --model Qwen/Qwen3-Embedding-0.6B
+    # Index with Qwen3 Embedding
+    python embed_indexer.py --model Qwen/Qwen3-Embedding-0.6B
 
-  # Index only titles and comments
-  python embed_indexer.py --types title comment
+    # Use Ollama backend (model must already be present)
+    python embed_indexer.py --ollama --model nomic-embed-text
 
-  # Show statistics only
-  python embed_indexer.py --stats
-
-Available models:
-  Ollama (local):
-    - nomic-embed-text (768d, default)
-    - gemma2:2b (2048d)
-    - mxbai-embed-large (1024d)
-    - all-minilm (384d)
-
-  Sentence-transformers via HuggingFace:
-  - google/embeddinggemma-300m (768d, Gemma-based)
-  - BAAI/bge-m3 (1024d, multilingual)
-  - Qwen/Qwen3-Embedding-0.6B (1024d)
-  - Qwen/Qwen3-Embedding-8B (4096d, high quality)
-        """
+    # Show statistics only
+    python embed_indexer.py --stats
+                """
     )
 
     parser.add_argument("--db", type=Path, default=Path(os.environ.get("SEED_DB_PATH", DEFAULT_DB_PATH)),
                         help="Path to SQLite database")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                         help=f"Embedding model (default: {DEFAULT_MODEL})")
+    parser.add_argument("--ollama", action="store_true",
+                        help="Use Ollama backend (default: sentence-transformers)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Enable verbose timing traces")
     parser.add_argument("--batch-size", type=int, default=100,
                         help="Batch size for processing")
     parser.add_argument("--max", type=int, default=None,
@@ -457,14 +513,20 @@ Available models:
 
     args = parser.parse_args()
 
-    indexer = EmbeddingIndexer(args.db, args.model)
+    indexer = EmbeddingIndexer(
+        args.db,
+        args.model,
+        use_ollama=args.ollama,
+        verbose=args.verbose,
+    )
 
     if args.stats:
         stats = indexer.get_stats()
         print(json.dumps(stats, indent=2))
         return
 
-    print(f"Indexing with model: {args.model}")
+    backend_label = "ollama" if args.ollama else "sentence-transformers"
+    print(f"Indexing with model: {args.model} ({backend_label})")
     print(f"Database: {args.db}")
     print()
 

@@ -3,7 +3,6 @@ zstandard>=0.21.0      # Zstd decompression for blobs
 cbor2>=5.4.0           # DAG-CBOR decoding
 
 # Embeddings (HuggingFace models)
-sentence-transformers>=2.2.0
 torch>=2.0.0
 huggingface-hub>=1.3.1
 
