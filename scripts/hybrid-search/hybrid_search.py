@@ -12,8 +12,6 @@ import os
 import sqlite3
 import json
 import struct
-import re
-import hashlib
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
@@ -29,6 +27,9 @@ from seed_decoder import DEFAULT_DB_PATH
 from embed_indexer import (
     get_embedding_backend,
     DEFAULT_MODEL,
+    CONTENT_TYPES,
+    vec_table_name,
+    quote_ident,
 )
 
 
@@ -70,20 +71,28 @@ class HybridSearch:
         self.model = model
         self.rrf_k = rrf_k  # RRF constant
         self._backend = None
-        self._vec_table_checked = False
-        self._vec_table_name_cache: Optional[str] = None
 
-    def _vec_table_name(self, dimensions: int) -> str:
-        """Return a SQLite-safe, deterministic vec table name for the current model."""
-        if self._vec_table_name_cache is not None:
-            return self._vec_table_name_cache
+    def _quote_ident(self, ident: str) -> str:
+        return quote_ident(ident)
 
-        safe = re.sub(r"[^0-9A-Za-z_]+", "_", self.model).strip("_")
-        if not safe:
-            safe = "model"
-        #suffix = hashlib.sha1(self.model.encode("utf-8")).hexdigest()[:8]
-        self._vec_table_name_cache = f"vec_embeddings_{safe}_{dimensions}"
-        return self._vec_table_name_cache
+    def _assert_vec_table_exists(self, conn: sqlite3.Connection, dimensions: int) -> str:
+        """Return quoted vec table ident, or raise if missing."""
+        table_name = vec_table_name(self.model, dimensions)
+        row = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_schema
+            WHERE type='table' AND name=?
+            """,
+            (table_name,),
+        ).fetchone()
+
+        if row is None:
+            raise RuntimeError(
+                f"Missing vec table {table_name}. Run embed_indexer.py for model={self.model} first."
+            )
+
+        return self._quote_ident(table_name)
 
     def _get_backend(self):
         """Lazy-load embedding backend."""
@@ -107,63 +116,6 @@ class HybridSearch:
 
         return conn
 
-    def _ensure_vec_table(self, dimensions: int):
-        """Ensure vec embeddings virtual table exists with correct dimensions."""
-        if self._vec_table_checked:
-            return
-
-        dimensions = int(dimensions)
-        conn = self._get_connection(writable=True)
-
-        table_name = self._vec_table_name(dimensions)
-        table_ident = '"' + table_name.replace('"', '""') + '"'
-
-        cursor = conn.execute(
-            """
-            SELECT type, name, sql
-            FROM sqlite_schema
-            WHERE type='table' AND name=?
-            """,
-            (table_name,),
-        )
-
-        if not cursor.fetchone():
-            print(f"Creating {table_name} table with {dimensions} dimensions...")
-            conn.execute(
-                f"""
-                CREATE VIRTUAL TABLE {table_ident} USING vec0(
-                    embedding float[{dimensions}]
-                )
-                """
-            )
-        print("Checking for missing embeddings to populate vec table...")
-        cursor = conn.execute(
-            f"""
-            SELECT embed.id, embed.embedding
-            FROM embeddings embed
-            LEFT JOIN {table_ident} vec ON vec.rowid = embed.id
-            WHERE vec.rowid IS NULL
-              AND embed.model = ?
-            """,
-            (self.model,),
-        )
-
-        rows = cursor.fetchall()
-        if not rows:
-            print("No missing embeddings to populate vec table.")
-        else:
-            print(f"Populating {table_name} from existing embeddings, with {len(rows)} rows")
-            for row in rows:
-                conn.execute(
-                    f"INSERT INTO {table_ident}(rowid, embedding) VALUES (?, ?)",
-                    (row["id"], row["embedding"]),
-                )
-
-        conn.commit()
-        print(f"{table_name} table ready.")
-        conn.close()
-        self._vec_table_checked = True
-
     def _embedding_to_list(self, blob: bytes) -> List[float]:
         """Convert blob to embedding list."""
         count = len(blob) // 4
@@ -181,86 +133,74 @@ class HybridSearch:
         if content_types is None:
             content_types = ['title', 'document', 'comment']
 
-        # Generate query embedding
+        if not HAS_SQLITE_VEC:
+            raise RuntimeError(
+                "Semantic search requires sqlite-vec. Install with: pip install sqlite-vec"
+            )
+
         backend = self._get_backend()
         query_embedding = backend.embed([query])[0]
         dimensions = len(query_embedding)
-        # Ensure vec table exists
-        if HAS_SQLITE_VEC:
-            self._ensure_vec_table(dimensions)
 
         conn = self._get_connection()
+        table_ident = self._assert_vec_table_exists(conn, dimensions)
 
-        if HAS_SQLITE_VEC:
-            query_blob = serialize_float32(query_embedding)
-            placeholders = ",".join("?" * len(content_types))
-            vec_table = self._vec_table_name(dimensions)
+        query_blob = serialize_float32(query_embedding)
+        placeholders = ",".join("?" * len(content_types))
 
-            query_sql = f"""
-            SELECT
-                v.rowid,
-                v.distance,
-                e.blob_id,
-                e.block_id,
-                e.content_type,
-                fi.version,
-                fi.ts,
-                f.raw_content,
-                COALESCE(r1.iri, r2.iri) as iri,
-                pk.principal
-            FROM {vec_table} v
-            JOIN embeddings e ON e.id = v.rowid
-            JOIN fts_index fi ON fi.rowid = e.fts_rowid
-            JOIN fts f ON f.rowid = fi.rowid
-            LEFT JOIN structural_blobs sb ON sb.id = e.blob_id
-            LEFT JOIN resources r1 ON r1.id = sb.resource
-            LEFT JOIN blob_links bl ON bl.target = e.blob_id AND bl.type = 'ref/head'
-            LEFT JOIN structural_blobs sb_ref ON sb_ref.id = bl.source
-            LEFT JOIN resources r2 ON r2.id = sb_ref.resource
-            LEFT JOIN public_keys pk ON pk.id = sb.author
-            WHERE v.embedding MATCH ?
-              AND k = ?
-              AND e.model = ?
-              AND e.content_type IN ({placeholders})
-            ORDER BY v.distance
-            """
+        query_sql = f"""
+        SELECT
+            v.rowid,
+            v.distance,
+            fi.blob_id,
+            fi.block_id,
+            fi.type AS content_type,
+            fi.version,
+            fi.ts,
+            f.raw_content,
+            COALESCE(r1.iri, r2.iri) as iri,
+            pk.principal
+        FROM {table_ident} v
+        JOIN fts_index fi ON fi.rowid = v.rowid
+        JOIN fts f ON f.rowid = fi.rowid
+        LEFT JOIN structural_blobs sb ON sb.id = fi.blob_id
+        LEFT JOIN resources r1 ON r1.id = sb.resource
+        LEFT JOIN blob_links bl ON bl.target = fi.blob_id AND bl.type = 'ref/head'
+        LEFT JOIN structural_blobs sb_ref ON sb_ref.id = bl.source
+        LEFT JOIN resources r2 ON r2.id = sb_ref.resource
+        LEFT JOIN public_keys pk ON pk.id = sb.author
+        WHERE v.embedding MATCH ?
+          AND k = ?
+          AND fi.type IN ({placeholders})
+        ORDER BY v.distance
+        """
 
-            params = [query_blob, limit, self.model] + content_types
+        params = [query_blob, limit] + content_types
 
-            try:
-                cursor = conn.execute(query_sql, params)
-            except sqlite3.OperationalError as e:
-                print(f"sqlite-vec query error: {e}")
-                print("Falling back to brute-force search...")
-                conn.close()
-                return self._semantic_search_brute_force(query_embedding, limit, content_types)
-
-            results = []
-            for row in cursor:
-                # sqlite-vec returns L2 distance, convert to similarity score
-                # Lower distance = more similar, normalize to 0-1
-                distance = row["distance"]
-                similarity = 1.0 / (1.0 + distance)
-
-                results.append({
-                    "iri": row["iri"] or "",
-                    "blob_id": row["blob_id"],
-                    "block_id": row["block_id"],
-                    "content_type": row["content_type"],
-                    "text_snippet": row["raw_content"][:300] if row["raw_content"] else "",
-                    "version": row["version"] or "",
-                    "semantic_score": similarity,
-                    "timestamp": row["ts"],
-                    "author_principal": row["principal"].hex() if row["principal"] else None
-                })
-
+        try:
+            cursor = conn.execute(query_sql, params)
+        except sqlite3.OperationalError as e:
             conn.close()
-            return results[:limit]
+            raise RuntimeError(f"sqlite-vec query error: {e}") from e
 
-        else:
-            # Fallback to brute-force if sqlite-vec not available
-            conn.close()
-            return self._semantic_search_brute_force(query_embedding, limit, content_types)
+        results = []
+        for row in cursor:
+            distance = row["distance"]
+            similarity = 1.0 / (1.0 + distance)
+            results.append({
+                "iri": row["iri"] or "",
+                "blob_id": row["blob_id"],
+                "block_id": row["block_id"],
+                "content_type": row["content_type"],
+                "text_snippet": row["raw_content"][:300] if row["raw_content"] else "",
+                "version": row["version"] or "",
+                "semantic_score": similarity,
+                "timestamp": row["ts"],
+                "author_principal": row["principal"].hex() if row["principal"] else None
+            })
+
+        conn.close()
+        return results[:limit]
 
     def _semantic_search_brute_force(
         self,

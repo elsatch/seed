@@ -22,9 +22,9 @@ cd seed/scripts/hybrid-search
 ```
 
 This will:
+
 - Create a Python virtual environment
 - Install dependencies (sentence-transformers, torch, sqlite-vec)
-- Run schema migration
 
 **Note:** First run will download the embedding model (~600MB for EmbeddingGemma).
 
@@ -38,6 +38,8 @@ source .venv/bin/activate
 ```
 
 ### Index content
+
+First run creates the sqlite-vec table for the selected model.
 
 ```bash
 # Index with default model (EmbeddingGemma)
@@ -81,25 +83,25 @@ python hybrid_search.py "query" --weight 0.7
 
 ## Database Locations
 
-| Platform |                          Path                              |
-|----------|------------------------------------------------------------|
-| Linux    | `~/.config/Seed/daemon/db/db.sqlite`                       |
-| macOS    | `~/Library/Application Support/Seed/daemon/db/db.sqlite`   |
-| Windows  | `%APPDATA%/Seed/daemon/db/db.sqlite`                       |
+| Platform | Path                                                     |
+| -------- | -------------------------------------------------------- |
+| Linux    | `~/.config/Seed/daemon/db/db.sqlite`                     |
+| macOS    | `~/Library/Application Support/Seed/daemon/db/db.sqlite` |
+| Windows  | `%APPDATA%/Seed/daemon/db/db.sqlite`                     |
 
 ## Embedding Models
 
-| Model | Backend | Dimensions | Size | Notes |
-|-------|---------|------------|------|-------|
-| [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) | sentence-transformers | 768 | 300M | Gemma-based, MRL support |
-| [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | sentence-transformers | 1024 | 568M | Multilingual, 100+ languages |
-| [Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) | sentence-transformers | 1024 | 0.6B | Good balance |
-| [Qwen/Qwen3-Embedding-8B](https://huggingface.co/Qwen/Qwen3-Embedding-8B) | sentence-transformers | 4096 | 8B | Highest quality |
-| `nomic-embed-text` | Ollama | 768 | | **Default**, good balance |
-| `gemma2:2b` | Ollama | 2048 | | Higher quality, slower |
-| `mxbai-embed-large` | Ollama | 1024 | | Good alternative |
-| `all-minilm` | Ollama | 384 | | Fast, lower quality |
-| `all-MiniLM-L6-v2` | sentence-transformers | 384 | | Fallback option |
+| Model                                                                           | Backend               | Dimensions | Size | Notes                        |
+| ------------------------------------------------------------------------------- | --------------------- | ---------- | ---- | ---------------------------- |
+| [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m) | sentence-transformers | 768        | 300M | Gemma-based, MRL support     |
+| [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3)                               | sentence-transformers | 1024       | 568M | Multilingual, 100+ languages |
+| [Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)   | sentence-transformers | 1024       | 0.6B | Good balance                 |
+| [Qwen/Qwen3-Embedding-8B](https://huggingface.co/Qwen/Qwen3-Embedding-8B)       | sentence-transformers | 4096       | 8B   | Highest quality              |
+| `nomic-embed-text`                                                              | Ollama                | 768        |      | **Default**, good balance    |
+| `gemma2:2b`                                                                     | Ollama                | 2048       |      | Higher quality, slower       |
+| `mxbai-embed-large`                                                             | Ollama                | 1024       |      | Good alternative             |
+| `all-minilm`                                                                    | Ollama                | 384        |      | Fast, lower quality          |
+| `all-MiniLM-L6-v2`                                                              | sentence-transformers | 384        |      | Fallback option              |
 
 ## How It Works
 
@@ -129,6 +131,7 @@ python hybrid_search.py "query" --weight 0.7
 ### sqlite-vec not loading
 
 On macOS with system Python, you may need Homebrew Python:
+
 ```bash
 brew install python
 /opt/homebrew/bin/python3 -m venv .venv
@@ -141,6 +144,7 @@ First run downloads the model from HuggingFace. This can take a few minutes depe
 ### Out of memory
 
 Try a smaller model:
+
 ```bash
 python embed_indexer.py --model google/embeddinggemma-300m
 ```
