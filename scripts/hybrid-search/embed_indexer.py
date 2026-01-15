@@ -33,6 +33,8 @@ from seed_decoder import DEFAULT_DB_PATH
 
 # Default: sentence-transformers (HuggingFace)
 DEFAULT_MODEL = "google/embeddinggemma-300m"
+DEFAULT_BACKEND = "sentence-transformers"
+BACKEND_TYPES = ["sentence-transformers", "ollama"]
 # Content type to index
 CONTENT_TYPES = ['title', 'document', 'comment']
 
@@ -158,7 +160,7 @@ class OllamaBackend(EmbeddingBackend):
         response = requests.post(
             f"{self.base_url}/api/embed",
             json={"model": self.model_name, "input": texts},
-            timeout=300
+            timeout=600
         )
         response.raise_for_status()
         
@@ -227,11 +229,13 @@ class SentenceTransformersBackend(EmbeddingBackend):
 
 def get_embedding_backend(
     model: str,
-    use_ollama: bool = False,
+    name: str,
     verbose: bool = False,
 ) -> EmbeddingBackend:
     """Factory function to get appropriate embedding backend."""
-    if use_ollama:
+    if name not in BACKEND_TYPES:
+        raise ValueError(f"Unknown embedding backend: {name}")
+    if name == "ollama":
         return OllamaBackend(model, verbose=verbose)
     return SentenceTransformersBackend(model, verbose=verbose)
 
@@ -243,12 +247,12 @@ class EmbeddingIndexer:
         self,
         db_path: Path = DEFAULT_DB_PATH,
         model: str = DEFAULT_MODEL,
-        use_ollama: bool = False,
+        backend_name: str = DEFAULT_BACKEND,
         verbose: bool = False,
     ):
         self.db_path = Path(db_path)
         self.model = model
-        self.use_ollama = use_ollama
+        self.backend_name = backend_name
         self.verbose = verbose
         self._backend: Optional[EmbeddingBackend] = None
         self._vec_table_name_cache: dict[int, str] = {}
@@ -258,7 +262,7 @@ class EmbeddingIndexer:
         if self._backend is None:
             self._backend = get_embedding_backend(
                 self.model,
-                self.use_ollama,
+                self.backend_name,
                 verbose=self.verbose,
             )
         return self._backend
@@ -501,8 +505,8 @@ Examples:
                         help="Path to SQLite database")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                         help=f"Embedding model (default: {DEFAULT_MODEL})")
-    parser.add_argument("--ollama", action="store_true",
-                        help="Use Ollama backend (default: sentence-transformers)")
+    parser.add_argument("--backend", default=DEFAULT_BACKEND, choices=BACKEND_TYPES,
+                        help="Embedding backend (default: sentence-transformers)")
     parser.add_argument("--verbose", action="store_true",
                         help="Enable verbose timing traces")
     parser.add_argument("--batch-size", type=int, default=100,
@@ -519,7 +523,7 @@ Examples:
     indexer = EmbeddingIndexer(
         args.db,
         args.model,
-        use_ollama=args.ollama,
+        backend_name=args.backend,
         verbose=args.verbose,
     )
 
@@ -528,8 +532,7 @@ Examples:
         print(json.dumps(stats, indent=2))
         return
 
-    backend_label = "ollama" if args.ollama else "sentence-transformers"
-    print(f"Indexing with model: {args.model} ({backend_label})")
+    print(f"Indexing with model: {args.model} ({args.backend})")
     print(f"Database: {args.db}")
     print()
 
