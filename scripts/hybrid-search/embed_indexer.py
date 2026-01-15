@@ -88,10 +88,8 @@ class OllamaBackend(EmbeddingBackend):
         self._dimensions: Optional[int] = None
         self._backend_name: str = "ollama"
 
-        self._pull_model()
-
         # Verify Ollama is running and model is available
-        self._verify_model()
+        self._verify_model(pull_if_missing=True)
         self._infer_dimensions()
     
     def get_name(self) -> str:
@@ -106,7 +104,7 @@ class OllamaBackend(EmbeddingBackend):
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to pull model '{self.model_name}'.") from e
 
-    def _verify_model(self):
+    def _verify_model(self, pull_if_missing: bool = False):
         """Check if Ollama is running and model is available."""
         try:
             response = requests.get(f"{self.base_url}/api/tags", timeout=5)
@@ -121,6 +119,11 @@ class OllamaBackend(EmbeddingBackend):
                 for name in model_names
             )
             if not available:
+                if pull_if_missing:
+                    print(f"Model '{self.model_name}' not found in Ollama. Attempting to pull...")
+                    self._pull_model()
+                    # Re-verify after pulling
+                    return self._verify_model(pull_if_missing=False)
                 available_list = ", ".join(sorted({n for n in model_names if n}))
                 raise RuntimeError(
                     f"Model '{self.model_name}' not found in Ollama. "

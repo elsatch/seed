@@ -68,11 +68,13 @@ class HybridSearch:
         model: str = DEFAULT_MODEL,
         rrf_k: int = 60,
         verbose: bool = False,
+        use_ollama: bool = False,
     ):
         self.db_path = Path(db_path)
         self.model = model
         self.rrf_k = rrf_k  # RRF constant
         self.verbose = verbose
+        self.use_ollama = use_ollama
         self._backend = None
 
     def _quote_ident(self, ident: str) -> str:
@@ -100,7 +102,7 @@ class HybridSearch:
     def _get_backend(self):
         """Lazy-load embedding backend."""
         if self._backend is None:
-            self._backend = get_embedding_backend(self.model, verbose=self.verbose)
+            self._backend = get_embedding_backend(self.model, verbose=self.verbose, use_ollama=self.use_ollama)
         return self._backend
 
     def _get_connection(self, writable: bool = False) -> sqlite3.Connection:
@@ -544,6 +546,8 @@ Examples:
     parser.add_argument("--limit", type=int, default=20, help="Max results")
     parser.add_argument("--types", nargs="+", default=CONTENT_TYPES, choices=CONTENT_TYPES,
                         help="Content types to search")
+    parser.add_argument("--ollama", action="store_true",
+                        help="Use Ollama backend (default: sentence-transformers)")
     parser.add_argument("--weight", type=float, default=0.5,
                         help="Semantic weight for hybrid mode (0-1)")
     parser.add_argument("--format", choices=["json", "text"], default="text",
@@ -557,7 +561,7 @@ Examples:
 
     args = parser.parse_args()
 
-    search = HybridSearch(args.db, args.model, verbose=args.verbose)
+    search = HybridSearch(args.db, args.model, verbose=args.verbose, use_ollama=args.ollama)
 
     output = search.search(
         args.query,
