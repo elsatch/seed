@@ -1,0 +1,13 @@
+# Core dependencies
+zstandard>=0.21.0      # Zstd decompression for blobs
+cbor2>=5.4.0           # DAG-CBOR decoding
+
+# Embeddings (HuggingFace models)
+torch>=2.0.0
+huggingface-hub<1.0
+sentence-transformers>=5.0.0
+tokenizers>=0.20.0
+
+# Vector search (sqlite-vec is the successor to sqlite-vss)
+# https://alexgarcia.xyz/sqlite-vec/
+sqlite-vec>=0.1.1
